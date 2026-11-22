@@ -102,7 +102,7 @@
 <div id="title">☁️ PETUALANGAN AWAN: MISI KE PUNCAK 🌈</div>
 <div id="hint">👆 Seret layar untuk memutar kamera • Scroll/cubit untuk zoom</div>
 <div id="msg">Lempar dadu dan panjat kotak-kotak di awan sampai ke puncak! 🎲</div>
-<div id="legend">🟡 = Kuis &nbsp; ⬛ = Jebakan (terjun payung!)<br>🌈 = Pelangi (terbang!) &nbsp; 🌀 = Pegas (melontar!)<br>💣 = Bom (gosong, giliran hangus!) &nbsp; 🏁 = Puncak</div>
+<div id="legend">🟡 = Kuis &nbsp; ⬛ = Jebakan (terjun payung!)<br>🌈 = Pelangi (terbang!) &nbsp; 🌀 = Pegas (melontar!)<br>💣 = Bom (gosong, giliran hangus!) &nbsp; 🏁 = Puncak<br>💥 = Tabrakan! Yang sudah di tangga jatuh ke kotak 1!</div>
 <div id="controls">
   <div id="diceFace">🎲</div>
   <button id="rollBtn" disabled>🎲 LEMPAR DADU</button>
@@ -143,6 +143,7 @@
       🌈 <b>Kotak pelangi = Tangga pelangi.</b> Terbang di jalur pelangi ke atas!<br><br>
       🌀 <b>Kotak pegas = melontar!</b> Kamu terlontar jauh ke atas!<br><br>
       💣 <b>Kotak bom = gosong!</b> Ada 6 bom di papan! Kamu gosong dan giliranmu hangus sekali!<br><br>
+      💥 <b>Tabrakan!</b> Kalau kamu mendarat di tangga yang sudah ditempati pemain lain, pemain itu jatuh terjun payung ke kotak 1! 🪂<br><br>
       🏁 <b>Kotak 100 = Puncak.</b> Harus mendarat dengan angka yang pas. Makin tinggi, makin banyak awan di bawahmu — hati-hati, jangan lihat ke bawah! 😄
     </p>
     <button class="btn" id="rulesClose">Siap, Main! 🚀</button>
@@ -896,8 +897,28 @@ async function fallWithParachute(from, to) {
   await sleep(600);
 }
 
+// v22: tabrakan — kalau mover mendarat di tangga yang sudah ditempati pemain lain,
+// pemain yang sudah di sana jatuh terjun payung ke kotak 1 (kotak 1 aman, boleh ditempati bersama).
+async function checkCollision() {
+  if (mode === 'solo' || pos <= 1) return;
+  const n = mode === 'local2' ? localCount : mode === 'online' ? onlineCount : 2;
+  for (let i = 0; i < n; i++) {
+    if (i === mover || players[i].pos !== pos) continue;
+    if (mode === 'online' && outPlayers[i]) continue;
+    const victim = i, who = mover;
+    setMsg(`💥 ${players[who].name} mendarat di kotak ${pos} — ${players[victim].name} yang sudah di sana jatuh terjun payung ke kotak 1! 🪂`);
+    sfx.trap();
+    mover = victim;
+    state = 'effect';
+    await fallWithParachute(pos, 1);
+    mover = who; pos = players[mover].pos; player = players[mover].group;
+    return;
+  }
+}
+
 async function afterLanding() {
   if (pos === TOTAL) { winGame(); return; }
+  await checkCollision();
   if (RAINBOWS[pos]) {
     const dest = RAINBOWS[pos];
     setMsg(`🌈 Pelangi! Terbang di jalur pelangi ke kotak ${dest}!`);
