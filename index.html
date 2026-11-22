@@ -51,7 +51,7 @@
     box-shadow: 0 5px 0 #b91c1c, 0 8px 18px rgba(0,0,0,.3);
   }
   #rollBtn:active { transform: translateY(4px); box-shadow: 0 1px 0 #b91c1c; }
-  #rollBtn:disabled { opacity: .55; cursor: default; }
+  #rollBtn:disabled, .btn:disabled { opacity: .55; cursor: default; }
   #rulesBtn {
     border: none; cursor: pointer; font-size: 13px; font-weight: 700; color: #1e3a5f;
     background: rgba(255,255,255,.9); padding: 7px 16px; border-radius: 999px;
@@ -137,6 +137,8 @@
       🎲 <b>Lempar dadu</b>, lalu melangkah sesuai angka dadu.<br><br>
       🟡 <b>Kotak kuning = Kuis.</b> Jawab benar biar tetap di situ. Jawaban salah = mundur 3 kotak!<br><br>
       📚 <b>Paket Kuis:</b> pilih Assefaru, SD / SMP / SMA (lalu pilih kelasnya), atau <b>🚫 Tanpa Kuis</b> untuk main santai tanpa soal!<br><br>
+
+      🌐 <b>Main Online:</b> buat room dan bagikan kodenya — bisa main 2–5 pemain dari HP masing-masing!<br><br>
       ⬛ <b>Kotak gelap = Jebakan awan badai.</b> Tangganya runtuh, kamu terjun payung ke bawah!<br><br>
       🌈 <b>Kotak pelangi = Tangga pelangi.</b> Terbang di jalur pelangi ke atas!<br><br>
       🌀 <b>Kotak pegas = melontar!</b> Kamu terlontar jauh ke atas!<br><br>
@@ -198,8 +200,9 @@
     <div class="big">🌐</div>
     <h2>Kode Room Kamu</h2>
     <p style="font-size:42px;font-weight:800;letter-spacing:8px;color:#1e3a5f" id="codeText">----</p>
-    <p>Kirim kode ini ke temanmu. Dia buka game yang sama, pilih "Gabung Room", lalu masukkan kode ini.</p>
-    <p id="waitText">Menunggu teman bergabung...</p>
+    <p>Kirim kode ini ke temanmu (maksimal 5 pemain). Dia buka game yang sama, pilih "Gabung Room", lalu masukkan kode ini.</p>
+    <p id="waitText">Menunggu teman bergabung... (1/5 pemain)</p>
+    <button class="btn" id="codeStart" disabled>▶ Mulai Main</button>
     <button class="btn" id="codeCancel" style="background:linear-gradient(180deg,#94a3b8,#64748b)">Batal</button>
   </div>
 </div>
@@ -641,7 +644,7 @@ const msgEl = byId('msg'), rollBtn = byId('rollBtn'), diceFace = byId('diceFace'
 let pos = 0, rolls = 0, state = 'idle'; // idle | rolling | moving | quiz | effect | won
 let mode = 'solo', myIdx = 0, turn = 0, mover = 0;
 let burnt = [false, false, false, false, false];
-let myPeer = null, conn = null, roomCode = '';
+let myPeer = null, conns = [], roomCode = '', isHost = false, onlineCount = 2, onlineStarted = false, outPlayers = [false, false, false, false, false];
 let questions = [...SOAL].sort(() => Math.random() - 0.5), qIdx = 0;
 const PACKS = { assefaru: SOAL, tanpakuis: null, sd1: SOAL_SD1, sd2: SOAL_SD2, sd3: SOAL_SD3, sd4: SOAL_SD4, sd5: SOAL_SD5, sd6: SOAL_SD6, smp7: SOAL_SMP7, smp8: SOAL_SMP8, smp9: SOAL_SMP9, sma10: SOAL_SMA10, sma11: SOAL_SMA11, sma12: SOAL_SMA12 };
 const LEVELS = { sd: [1, 2, 3, 4, 5, 6], smp: [7, 8, 9], sma: [10, 11, 12] };
@@ -697,9 +700,10 @@ function updateHud() {
     byId('turnChip').textContent = players[turn].name;
     byId('oppLabel').textContent = '👥 Berikutnya: ' + players[nxt].name;
   } else if (mode === 'online') {
-    byId('oppChip').textContent = players[1 - myIdx].pos;
-    byId('turnChip').textContent = turn === myIdx ? 'Kamu' : 'Lawan';
-    byId('oppLabel').textContent = '👥 Lawan:';
+    const nxt = (turn + 1) % onlineCount;
+    byId('oppChip').textContent = players[nxt].pos;
+    byId('turnChip').textContent = turn === myIdx ? 'Kamu' : players[turn].name;
+    byId('oppLabel').textContent = '👥 Berikutnya: ' + players[nxt].name;
   } else if (mode === 'ai') {
     byId('oppChip').textContent = players[1].pos;
     byId('turnChip').textContent = turn === 0 ? 'Kamu' : 'AI';
@@ -708,7 +712,9 @@ function updateHud() {
 }
 function endTurn(customMsg) {
   if (mode === 'solo') { state = 'idle'; setMsg(customMsg || `Kamu di kotak ${pos}. Lempar lagi! 🎲`); rollBtn.disabled = false; return; }
-  turn = (turn + 1) % (mode === 'local2' ? localCount : 2); mover = turn; pos = players[mover].pos; player = players[mover].group; updateHud();
+  turn = (turn + 1) % (mode === 'local2' ? localCount : mode === 'online' ? onlineCount : 2);
+  if (mode === 'online') { let guard = 0; while (outPlayers[turn] && guard++ < 8) turn = (turn + 1) % onlineCount; if (outPlayers[turn]) turn = myIdx; }
+  mover = turn; pos = players[mover].pos; player = players[mover].group; updateHud();
   if (burnt[turn]) {
     burnt[turn] = false;
     restorePlayer(turn);
@@ -1050,14 +1056,16 @@ function resetGame() {
   confetti.forEach(m => scene.remove(m)); confetti.length = 0;
   pos = 0; rolls = 0; qIdx = 0; turn = 0; mover = 0;
   if (mode !== 'local2') localCount = 2;
-  if (mode === 'solo' || mode === 'online') { players[0].name = 'Pemain 1 🔴'; players[1].name = 'Pemain 2 🟡'; }
+  if (mode === 'solo') { players[0].name = 'Pemain 1 🔴'; players[1].name = 'Pemain 2 🟡'; }
+  else if (mode === 'online') { players.forEach((pl, i) => pl.name = 'Pemain ' + (i + 1) + ' ' + NAME_EMOJIS[i]); }
+  if (mode !== 'online') outPlayers = [false, false, false, false, false];
   burnt = [false, false, false, false, false];
   questions = quizPack ? [...quizPack].sort(() => Math.random() - 0.5) : [];
   players.forEach((pl, i) => {
     pl.pos = 0; pl.correct = 0;
     pl.group.position.copy(tilePos(0)); pl.group.position.y += 0.3;
     pl.group.position.x += playerOff(i);
-    pl.group.visible = mode === 'local2' ? i < localCount : i < 2;
+    pl.group.visible = mode === 'local2' ? i < localCount : mode === 'online' ? (i < onlineCount && !outPlayers[i]) : i < 2;
   });
   player = players[0].group;
   updateHud(); state = 'idle';
@@ -1065,7 +1073,7 @@ function resetGame() {
   if (mode === 'solo') { rollBtn.disabled = false; setMsg('Lempar dadu dan panjat kotak-kotak di awan sampai ke puncak! 🎲'); }
   else if (mode === 'local2') { rollBtn.disabled = false; setMsg(`Main bersama di 1 HP! ${localCount} pemain — Pemain 1 mulai dulu 🎲`); }
   else if (mode === 'ai') { rollBtn.disabled = false; setMsg('Giliranmu! Lawanmu AI 🤖'); }
-  else { rollBtn.disabled = turn !== myIdx; setMsg(turn === myIdx ? 'Giliranmu! Lempar dadu! 🎲' : 'Giliran lawan... tunggu ya ⏳'); }
+  else { rollBtn.disabled = turn !== myIdx; setMsg(turn === myIdx ? 'Giliranmu! Lempar dadu! 🎲' : 'Giliran ' + players[turn].name + '... tunggu ya ⏳'); }
 }
 function showMultiChips() {
   byId('turnChipWrap').style.display = 'inline-block';
@@ -1186,40 +1194,91 @@ function makeCode() {
   for (let i = 0; i < 4; i++) c += chars[Math.floor(Math.random() * chars.length)];
   return c;
 }
-function send(o) { if (conn && conn.open) conn.send(o); }
-function setupConn() {
-  conn.on('open', () => {
-    byId('codeModal').classList.remove('open');
-    byId('joinModal').classList.remove('open');
-    startMultiplayer();
-  });
-  conn.on('data', onNetData);
-  conn.on('close', () => { setMsg('⚠️ Lawan terputus dari game.'); rollBtn.disabled = true; });
-  conn.on('error', () => { setMsg('⚠️ Koneksi dengan lawan bermasalah.'); });
+function send(o) { conns.forEach(c => { if (c && c.open) c.send(o); }); }
+function sendTo(c, o) { if (c && c.open) c.send(o); }
+function sendExcept(o, except) { conns.forEach(c => { if (c && c !== except && c.open) c.send(o); }); }
+function onlinePlayers() { let n = 0; for (let i = 0; i < onlineCount; i++) if (!outPlayers[i]) n++; return n; }
+function cleanupNet() { try { if (myPeer) myPeer.destroy(); } catch (e) {} myPeer = null; conns = []; isHost = false; }
+function updateWaitText() {
+  byId('waitText').textContent = onlinePlayers() + '/5 pemain di room — bagikan kode ke temanmu! ' + (onlinePlayers() < 2 ? 'Tunggu minimal 1 teman bergabung...' : 'Siap main! Tekan Mulai Main.');
+  byId('codeStart').disabled = onlinePlayers() < 2;
+}
+function setupConn(c, idx) {
+  if (isHost) {
+    c.on('open', () => {
+      sendTo(c, { t: 'welcome', idx: c._pIdx, count: onlineCount, out: outPlayers.slice() });
+      send({ t: 'joined', idx: c._pIdx, count: onlineCount });
+      updateWaitText();
+    });
+    c.on('data', d => onNetData(d, c));
+    c.on('close', () => guestLeft(c._pIdx));
+    c.on('error', () => guestLeft(c._pIdx));
+  } else {
+    c.on('open', () => {
+      byId('codeModal').classList.remove('open');
+      byId('joinModal').classList.remove('open');
+      setMsg('Terhubung ke room! Menunggu host memulai game... ⏳');
+    });
+    c.on('data', d => onNetData(d, null));
+    c.on('close', () => { setMsg('⚠️ Host terputus dari game.'); rollBtn.disabled = true; });
+    c.on('error', () => { setMsg('⚠️ Koneksi dengan host bermasalah.'); });
+  }
+}
+function guestLeft(idx) {
+  if (idx == null || idx < 1 || outPlayers[idx]) return;
+  outPlayers[idx] = true;
+  send({ t: 'left', idx });
+  if (!onlineStarted) { updateWaitText(); return; }
+  setMsg('Pemain ' + (idx + 1) + ' terputus dari game.');
+  if (turn === idx && state === 'idle') endTurn();
 }
 function hostGame() {
   roomCode = makeCode();
   byId('codeText').textContent = roomCode;
   byId('modeModal').classList.remove('open');
   byId('codeModal').classList.add('open');
-  myIdx = 0;
+  myIdx = 0; isHost = true; onlineCount = 1; onlineStarted = false;
+  outPlayers = [false, false, false, false, false];
+  conns = [];
+  updateWaitText();
   myPeer = new Peer('awan-' + roomCode);
-  myPeer.on('open', () => { byId('waitText').textContent = 'Kode siap! Menunggu teman bergabung...'; });
-  myPeer.on('connection', c => { conn = c; setupConn(); });
+  myPeer.on('open', () => { updateWaitText(); });
+  myPeer.on('connection', c => {
+    if (onlineStarted) { c.on('open', () => { sendTo(c, { t: 'started' }); setTimeout(() => { try { c.close(); } catch (e) {} }, 300); }); return; }
+    let idx = -1;
+    for (let i = 1; i < onlineCount; i++) if (outPlayers[i]) { idx = i; break; }
+    if (idx === -1) {
+      if (onlineCount >= 5) { c.on('open', () => { sendTo(c, { t: 'full' }); setTimeout(() => { try { c.close(); } catch (e) {} }, 300); }); return; }
+      idx = onlineCount; onlineCount++;
+    }
+    outPlayers[idx] = false;
+    conns[idx] = c;
+    c._pIdx = idx;
+    setupConn(c, idx);
+  });
   myPeer.on('error', err => {
     if (err.type === 'unavailable-id') { try { myPeer.destroy(); } catch (e) {} hostGame(); }
     else setMsg('Koneksi gagal (' + err.type + '). Coba lagi.');
   });
 }
+function startOnlineGame() {
+  if (!isHost || onlinePlayers() < 2) return;
+  onlineStarted = true;
+  send({ t: 'start', count: onlineCount, out: outPlayers.slice() });
+  byId('codeModal').classList.remove('open');
+  startMultiplayer();
+}
 function joinGame(code) {
   roomCode = (code || '').trim().toUpperCase();
   if (roomCode.length !== 4) { byId('joinErr').style.display = 'block'; byId('joinErr').textContent = 'Kode harus 4 huruf/angka.'; return; }
-  myIdx = 1;
+  myIdx = -1; isHost = false; onlineCount = 2; onlineStarted = false;
+  outPlayers = [false, false, false, false, false];
+  conns = [];
   byId('joinErr').style.display = 'none';
   byId('joinModal').classList.remove('open');
   setMsg('Menghubungkan ke room ' + roomCode + '...');
   myPeer = new Peer();
-  myPeer.on('open', () => { conn = myPeer.connect('awan-' + roomCode, { reliable: true }); setupConn(); });
+  myPeer.on('open', () => { const c = myPeer.connect('awan-' + roomCode, { reliable: true }); conns = [c]; setupConn(c); });
   myPeer.on('error', err => {
     setMsg('Tidak bisa bergabung (' + err.type + '). Cek kodenya.');
     byId('modeModal').classList.add('open');
@@ -1227,18 +1286,24 @@ function joinGame(code) {
 }
 function startMultiplayer() {
   mode = 'online';
-  players[1].name = 'Pemain 2 🟡';
+  for (let i = 0; i < onlineCount; i++) players[i].name = 'Pemain ' + (i + 1) + ' ' + NAME_EMOJIS[i];
   showMultiChips();
   resetGame();
-  setMsg(myIdx === 0 ? 'Terhubung! Kamu Pemain 1, mulai dulu! 🎲' : 'Terhubung! Kamu Pemain 2, giliran Pemain 1 dulu ⏳');
+  setMsg(myIdx === 0 ? 'Terhubung! ' + onlinePlayers() + ' pemain online — Kamu Pemain 1, mulai dulu! 🎲' : 'Game dimulai! Kamu Pemain ' + (myIdx + 1) + ', giliran Pemain 1 dulu ⏳');
   rollBtn.disabled = turn !== myIdx;
   startMusic();
 }
-async function onNetData(d) {
+async function onNetData(d, from) {
   if (!d || !d.t) return;
-  if (d.t === 'roll') { await applyRoll(d.n, d.by); }
-  else if (d.t === 'quiz') { applyQuizResult(d.ok, d.by); }
-  else if (d.t === 'rematch') { resetGame(); }
+  if (d.t === 'welcome') { myIdx = d.idx; onlineCount = d.count; if (d.out) outPlayers = d.out.slice(); setMsg('Terhubung! Kamu Pemain ' + (d.idx + 1) + ' — menunggu host memulai game... ⏳'); }
+  else if (d.t === 'joined') { onlineCount = d.count; outPlayers[d.idx] = false; if (!isHost && d.idx !== myIdx) setMsg('Pemain ' + (d.idx + 1) + ' bergabung! Total ' + onlinePlayers() + '/5 pemain. Menunggu host... ⏳'); else if (isHost) updateWaitText(); }
+  else if (d.t === 'start') { onlineCount = d.count; if (d.out) outPlayers = d.out.slice(); onlineStarted = true; byId('codeModal').classList.remove('open'); startMultiplayer(); }
+  else if (d.t === 'full') { setMsg('Room sudah penuh (5 pemain). Coba room lain.'); cleanupNet(); byId('modeModal').classList.add('open'); }
+  else if (d.t === 'started') { setMsg('Game di room itu sudah dimulai. Coba room lain.'); cleanupNet(); byId('modeModal').classList.add('open'); }
+  else if (d.t === 'left') { if (!outPlayers[d.idx]) { outPlayers[d.idx] = true; setMsg('Pemain ' + (d.idx + 1) + ' terputus dari game.'); if (onlineStarted && turn === d.idx && state === 'idle') endTurn(); } }
+  else if (d.t === 'roll') { if (isHost) sendExcept(d, from); await applyRoll(d.n, d.by); }
+  else if (d.t === 'quiz') { if (isHost) sendExcept(d, from); applyQuizResult(d.ok, d.by); }
+  else if (d.t === 'rematch') { if (isHost) sendExcept(d, from); resetGame(); }
 }
 byId('soloBtn').onclick = () => { byId('modeModal').classList.remove('open'); mode = 'solo'; players[1].name = 'Pemain 2 🟡'; byId('turnChipWrap').style.display = 'none'; byId('oppChipWrap').style.display = 'none'; resetGame(); startMusic(); };
 byId('local2Btn').onclick = () => { const d = byId('countDrop'); d.style.display = d.style.display === 'flex' ? 'none' : 'flex'; byId('nameDrop').style.display = 'none'; };
@@ -1254,7 +1319,8 @@ byId('aiBtn').onclick = () => startAI();
 byId('hostBtn').onclick = () => hostGame();
 byId('joinBtn').onclick = () => { byId('modeModal').classList.remove('open'); byId('joinModal').classList.add('open'); };
 byId('joinGo').onclick = () => joinGame(byId('joinCode').value);
-byId('codeCancel').onclick = () => { if (myPeer) { try { myPeer.destroy(); } catch (e) {} myPeer = null; } byId('codeModal').classList.remove('open'); byId('modeModal').classList.add('open'); };
+byId('codeCancel').onclick = () => { if (myPeer) { try { myPeer.destroy(); } catch (e) {} myPeer = null; } conns = []; isHost = false; byId('codeModal').classList.remove('open'); byId('modeModal').classList.add('open'); };
+byId('codeStart').onclick = () => startOnlineGame();
 
 
 // ---------- Efek suara (Web Audio API, tanpa file eksternal) ----------
